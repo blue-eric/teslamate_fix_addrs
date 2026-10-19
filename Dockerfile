@@ -1,11 +1,18 @@
-FROM ubuntu:22.04
+FROM python:3.12-slim
 
-RUN mkdir /root/app
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    CHECKPOINT_FILE=/data/checkpoint.json
 
-RUN apt update && apt install -y python3 python3-pip
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY teslamate_fix_addrs.py .
 
-COPY * /root/app
+# Progress (checkpoint.json) lives here; mount a volume to keep it across
+# container re-creation, otherwise mode 1 calls the map API for every
+# address again.
+VOLUME /data
+WORKDIR /data
 
-RUN pip install -r /root/app/requirements.txt
-
-ENTRYPOINT ["python3", "/root/app/teslamate_fix_addrs.py"]
+ENTRYPOINT ["python3", "/app/teslamate_fix_addrs.py"]
