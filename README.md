@@ -196,7 +196,7 @@ If you installed teslamate by docker, you can choose alternative solutions.
 
 See [docker-compose.yaml](docker-compose.yaml) and [.env.example](.env.example).
 
-Images are built by GitHub Actions and published to GitHub Container Registry: `ghcr.io/<owner>/teslamate_fix_addrs:latest` (main branch) and `:<version>` (git tag `v<version>`). To build your own image instead, replace `image:` with `build: ./teslamate_fix_addrs` (path of your clone). The first log line shows the version and the git commit of the running image.
+Images are built by GitHub Actions and published to GitHub Container Registry: `ghcr.io/<owner>/teslamate_fix_addrs:latest` (main branch) and `:<version>` (the `__version__` in the script, e.g. `:2.1.0`). To build your own image instead, replace `image:` with `build: ./teslamate_fix_addrs` (path of your clone). The first log line shows the version and the git commit of the running image.
 
 **Changing TeslaMate's language**
 
