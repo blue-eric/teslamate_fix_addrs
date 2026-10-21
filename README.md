@@ -47,13 +47,15 @@ Update address by [Tencent Maps API](https://lbs.qq.com/service/webService/webSe
 
 *Position accuracy (no offset)*
 
-* The coordinates sent to Tencent are the GPS positions **recorded by the car** that are linked to the address (charging position first, then drive end, then drive start). `addresses.latitude/longitude` is where OSM put the matched object (its centroid), which can be hundreds of meters away from the car, so it is only used as a fallback.
+* The coordinates sent to Tencent are GPS positions **recorded by the car** (charging, drive end and drive start positions linked to the address). `addresses.latitude/longitude` is where OSM put the matched object (its centroid), which can be hundreds of meters away from the car, so it is only used as a fallback.
+* TeslaMate shares one address row between every drive/charge resolved to the same OSM object. The real position closest to the median of all linked positions is used (the most typical place, e.g. home rather than one occasional stop nearby). A warning is logged when the linked positions are more than 300 m apart.
+* Coordinates are never written into `addresses`: TeslaMate re-geocodes addresses from them when its language setting changes, and expects the same OSM object back.
 * Coordinates are sent as WGS84 (GPS) with `coord_type=1`, Tencent converts them to GCJ-02 internally. No local coordinate transformation is done, and **coordinates in the database are never modified**.
 
 *What is overwritten*
 
 * Only addresses in China are updated by default (`UPDATE_OVERSEAS=true` to change).
-* Empty values returned by Tencent never overwrite existing values. `road` and `house_number` are always updated together, so they never mismatch.
+* Empty values returned by Tencent never overwrite existing values; empty string and NULL are treated as equal. `road` and `house_number` are always updated together, so they never mismatch.
 * Before the first overwrite, the original values are saved in `addresses.raw` (key `teslamate_fix_addrs`). Run with `--restore-original` to roll every updated address back.
 
 *Progress and failures*
@@ -193,6 +195,12 @@ If you installed teslamate by docker, you can choose alternative solutions.
 **Docker compose**
 
 See [docker-compose.yaml](docker-compose.yaml) and [.env.example](.env.example).
+
+Images are built by GitHub Actions and published to GitHub Container Registry: `ghcr.io/<owner>/teslamate_fix_addrs:latest` (main branch) and `:<version>` (git tag `v<version>`). To build your own image instead, replace `image:` with `build: ./teslamate_fix_addrs` (path of your clone). The first log line shows the version and the git commit of the running image.
+
+**Changing TeslaMate's language**
+
+Changing the language in TeslaMate settings re-geocodes every address with OSM and overwrites city, state, county, country, neighbourhood and display_name. Run mode 1 again with `--reset-checkpoint` afterwards.
 
 
 

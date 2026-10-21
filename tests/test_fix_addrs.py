@@ -207,9 +207,49 @@ def test_geocode_position_fallback_order(engine, db, tables, config):
     with Session(engine) as session:
         Addresses = tables[3]
         assert fa.get_geocode_coordinates(session, tables, session.get(Addresses, addr_drive)) \
-            == (4.0, 4.0, 'drive end')
+            == (4.0, 4.0, 'drive end (typical of 2)')
         assert fa.get_geocode_coordinates(session, tables, session.get(Addresses, addr_none)) \
             == (2.5, 2.5, 'address')
+
+
+def test_shared_address_uses_most_typical_position(engine, db, tables, caplog):
+    '''Many charges at home and one recent stop 2 km away share an address:
+    the home position must be used, not the most recent one.'''
+    addr = add_address(db, lat=33.370000, lng=120.200000)
+    home = [(33.368478, 120.211295), (33.368480, 120.211290), (33.368470, 120.211300)]
+    for lat, lng in home:
+        p = add_position(db, lat, lng)
+        db.exec('INSERT INTO charging_processes (position_id, address_id) VALUES (:p, :a)',
+                p=p, a=addr)
+    far = add_position(db, 33.387000, 120.211295)
+    db.exec('INSERT INTO charging_processes (position_id, address_id) VALUES (:p, :a)',
+            p=far, a=addr)
+
+    from sqlalchemy.orm import Session
+    with Session(engine) as session:
+        lat, lng, source = fa.get_geocode_coordinates(
+            session, tables, session.get(tables[3], addr))
+    assert (lat, lng) in home
+    assert source == 'charging (typical of 4)'
+    assert 'shared by 4 positions' in caplog.text
+
+
+@responses.activate
+def test_empty_string_and_null_are_equal(engine, db, tables, geocoder, config):
+    addr = add_address(db, road='希望大道', house_number='', name='阳光水岸花园',
+                       display_name='阳光水岸花园', state='江苏省', city='盐城市',
+                       county='亭湖区', country='中国')
+    responses.add(responses.GET, TENCENT_RE, json=tencent_result(
+        province='江苏省', city='盐城市', district='亭湖区', street='希望大道',
+        street_number='', recommend='阳光水岸花园'))
+
+    checkpoint = fa._default_checkpoint()
+    fa.update_addresses(engine, geocoder, config, tables, checkpoint)
+
+    row = db.one('SELECT house_number, raw FROM addresses WHERE id = :i', i=addr)
+    assert row['house_number'] == ''      # untouched, not rewritten to NULL
+    assert row['raw'] is None             # no change -> no backup written
+    assert checkpoint['map_update']['updated_count'] == 0
 
 
 @responses.activate

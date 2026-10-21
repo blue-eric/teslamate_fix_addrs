@@ -12,9 +12,11 @@ import urllib.parse
 from datetime import datetime
 import logging
 import argparse
+import math
 import os
 import re
 import signal
+import statistics
 import sys
 import tempfile
 import threading
@@ -25,7 +27,9 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-DEFAULT_USER_AGENT = 'teslamate_fix_addrs/2.0'
+__version__ = '2.1.0'
+
+DEFAULT_USER_AGENT = 'teslamate_fix_addrs/%s' % __version__
 
 # Set by SIGINT/SIGTERM. Loops check it between records so the current batch
 # can be committed before exiting. Also used as an interruptible sleep.
@@ -457,13 +461,14 @@ class TencentGeocoder(ReverseGeocoder):
             'display_name': display_name,
             'name': name,
         }
+        # '' and NULL display the same: not a change.
         changes = {k: v for k, v in new_values.items()
-                   if v and getattr(address_record, k) != v}
+                   if v and (getattr(address_record, k) or None) != v}
         if street:
             # road and house_number belong together: replace both, even if
             # Tencent has no house number for this street.
             for k, v in (('road', street), ('house_number', street_number or None)):
-                if getattr(address_record, k) != v:
+                if (getattr(address_record, k) or None) != v:
                     changes[k] = v
 
         if not changes:
@@ -789,14 +794,32 @@ def fix_empty_records(engine, http_client, config, tables, checkpoint):
 
 # ---------- Mode 1: Update addresses via reverse geocoder ----------
 
+# Linked positions read per source (most recent first) to pick a typical one.
+MAX_LINKED_POSITIONS = 500
+
+# Warn when positions sharing one address are spread wider than this.
+SPREAD_WARN_METERS = 300
+
+
+def distance_m(lat1, lng1, lat2, lng2):
+    '''Approximate distance in meters (equirectangular, fine below ~100 km).'''
+    x = math.radians(lng2 - lng1) * math.cos(math.radians((lat1 + lat2) / 2))
+    y = math.radians(lat2 - lat1)
+    return math.hypot(x, y) * 6371000
+
+
 def get_geocode_coordinates(session, tables, address_record):
     '''Return (lat, lng, source) used to reverse geocode an address.
 
     addresses.latitude/longitude is where OSM put the matched object (its
     centroid), which can be hundreds of meters away from the car, or more
-    for a long road. Prefer the GPS position the car actually recorded and
-    that is linked to this address: charging (parked) first, then drive end,
-    then drive start. Fall back to the address coordinates.
+    for a long road. Use the GPS positions the car actually recorded and
+    that are linked to this address instead.
+
+    TeslaMate shares one address row between every drive/charge resolved to
+    the same OSM object, so these positions may be spread out. Pick the real
+    position closest to their median: the most typical place, not skewed by
+    one occasional stop. Fall back to the address coordinates.
     '''
     Drives, ChargingProcesses, Positions, Addresses = tables
     candidates = (
@@ -806,20 +829,37 @@ def get_geocode_coordinates(session, tables, address_record):
         ('drive start', Drives, Drives.start_position_id,
          Drives.start_address_id),
     )
+    points = []
     for source, Table, position_col, address_col in candidates:
-        row = session.query(Positions.latitude, Positions.longitude) \
+        rows = session.query(Positions.latitude, Positions.longitude) \
             .join(Table, position_col == Positions.id) \
             .filter(address_col == address_record.id) \
             .filter(Positions.latitude.is_not(None)) \
             .filter(Positions.longitude.is_not(None)) \
             .order_by(Table.id.desc()) \
-            .first()
-        if row is not None:
-            return float(row.latitude), float(row.longitude), source
-    if address_record.latitude is None or address_record.longitude is None:
-        return None, None, None
-    return float(address_record.latitude), float(address_record.longitude), \
-        'address'
+            .limit(MAX_LINKED_POSITIONS) \
+            .all()
+        points.extend((float(r.latitude), float(r.longitude), source)
+                      for r in rows)
+
+    if not points:
+        if address_record.latitude is None or \
+                address_record.longitude is None:
+            return None, None, None
+        return float(address_record.latitude), \
+            float(address_record.longitude), 'address'
+
+    median_lat = statistics.median(p[0] for p in points)
+    median_lng = statistics.median(p[1] for p in points)
+    lat, lng, source = min(
+        points, key=lambda p: distance_m(p[0], p[1], median_lat, median_lng))
+
+    spread = max(distance_m(lat, lng, p[0], p[1]) for p in points)
+    if spread > SPREAD_WARN_METERS:
+        logging.warning("Address id=%d is shared by %d positions up to %d m "
+                        "apart, using the most typical one." %
+                        (address_record.id, len(points), spread))
+    return lat, lng, '%s (typical of %d)' % (source, len(points))
 
 
 def update_address_record(session, geocoder, tables, address_record):
@@ -1157,6 +1197,9 @@ def main():
     signal.signal(signal.SIGTERM, handle_signal)
 
     config = parse_args()
+    # APP_BUILD is set by the docker image build (git commit).
+    logging.info("teslamate_fix_addrs %s (build %s)" %
+                 (__version__, os.environ.get('APP_BUILD') or 'local'))
     if config.dry_run:
         logging.warning("dry-run mode: changes are logged but not saved.")
     engine = create_engine_from_config(config)
