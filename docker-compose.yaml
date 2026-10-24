@@ -1,9 +1,13 @@
+# 示例：把下面的服务加入 TeslaMate 的 docker-compose.yml，与 database 处于同一网络。
 services:
   teslamate_fix_addrs:
-    image: hipudding/teslamate_fix_addrs:latest
-    container_name: teslmate_fix_addrs
+    image: ghcr.io/blue-eric/teslamate_fix_addrs:latest   # 也可以固定版本，如 :2.1.0
+    container_name: teslamate_fix_addrs
     restart: unless-stopped
     environment:
+    - HTTP_PROXY=                 # 访问 OSM 的代理，如 http://代理IP:端口
+    - HTTPS_PROXY=                # OSM 是 https 地址，必须设置这一项
+    - NO_PROXY=apis.map.qq.com    # 腾讯地图直接连接，不走代理
     - DB_USER=teslamate
     - DB_PASSWD=123456
     - DB_HOST=database
@@ -12,15 +16,14 @@ services:
     - BATCH=10
     - HTTP_TIMEOUT=5
     - HTTP_RETRY=5
-    - INTERVAL=300
-    - MODE=0
-    - TENCENT_KEY=
-    - TENCENT_SK=
-    - USER_AGENT=
+    - INTERVAL=600                # 每隔多少秒运行一轮，0 表示只运行一次
+    - MODE=2                      # 0 只补空地址；1 只用腾讯地图更新；2 两者都做
+    - TZ=Asia/Shanghai
+    - TENCENT_KEY=                # 腾讯地图 key
+    - TENCENT_SK=                 # 腾讯地图签名 SK（key 开启签名校验时需要）
     - OSM_INTERVAL=1.0
     - GEOCODER_INTERVAL=0.3
+    - CHECKPOINT_FILE=/data/checkpoint.json
+    - DRY_RUN=true                # 试运行，只打日志不写库；确认无误后删除这一行
     volumes:
-    - teslamate-fix-addrs-data:/data
-
-volumes:
-  teslamate-fix-addrs-data:
+    - ./fix_addrs:/data           # 保存进度，必须挂载目录
